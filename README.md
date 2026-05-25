@@ -15,7 +15,7 @@ A local, encrypted password manager with anti-brute force protection.
 ## Installation
 
 ```bash
-git clone https://github.com/yourusername/passman
+git clone https://github.com/Haskar8136/Passman---Secure-Password-Manager
 cd passman
 pip install -r requirements.txt
 python passman.py
