@@ -19,3 +19,27 @@ git clone https://github.com/yourusername/passman
 cd passman
 pip install -r requirements.txt
 python passman.py
+```
+Usage
+
+    First run - Set your master password
+
+    Add passwords - Click "Add" button
+
+    Search - Type in search box
+
+    Copy - Double-click any entry
+
+    View/Hide - Toggle password visibility
+
+Security
+
+    Master password never stored
+
+    AES-256 encryption (military grade)
+
+    PBKDF2 key derivation (100,000 iterations)
+
+    Rate limiting: 5 attempts, 5 min lockout
+
+    Local storage only - no cloud, no telemetry
