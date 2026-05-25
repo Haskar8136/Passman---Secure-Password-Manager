@@ -43,3 +43,11 @@ Security
     Rate limiting: 5 attempts, 5 min lockout
 
     Local storage only - no cloud, no telemetry
+
+Requirements
+
+    Python 3.7+
+
+    cryptography
+
+    pyperclip
