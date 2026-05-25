@@ -1,19 +1,12 @@
 #!/usr/bin/env python3
-# passman.py - Secure Password Manager with Anti-Brute Force Protection
+# passman.py - UI for Passman
 
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
-from cryptography.fernet import Fernet
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from cryptography.hazmat.primitives import hashes
-import base64
-import json
-import os
-import sys
 import pyperclip
-import secrets
-import string
-import time
+import sys
+
+from core import PassmanCore
 
 # Modern color scheme
 COLORS = {
@@ -29,47 +22,18 @@ COLORS = {
     "tree_select": "#007acc"
 }
 
-class PassmanSecure:
+class PassmanUI:
     def __init__(self):
-        self.app_dir = os.path.expanduser("~/.passman")
-        self.key_file = os.path.join(self.app_dir, "key.key")
-        self.data_file = os.path.join(self.app_dir, "passwords.json")
+        self.core = PassmanCore()
         self.show_passwords = False
         
-        # Anti-brute force protection
-        self.failed_attempts = 0
-        self.lockout_time = None
-        self.max_attempts = 5
-        self.lockout_duration = 300  # 5 minutes
-        
-        if not os.path.exists(self.key_file):
+        if not self.core.exists():
             self.show_init_window()
         else:
-            self.show_main_window()
+            self.show_login()
     
-    def derive_key(self, master_password: str, salt: bytes = None) -> tuple:
-        if salt is None:
-            salt = os.urandom(16)
-        kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=100000)
-        key = base64.urlsafe_b64encode(kdf.derive(master_password.encode()))
-        return key, salt
-    
-    def encrypt_data(self, data: dict, master_password: str) -> bytes:
-        key, salt = self.derive_key(master_password)
-        f = Fernet(key)
-        json_data = json.dumps(data).encode()
-        encrypted = f.encrypt(json_data)
-        return salt + encrypted
-    
-    def decrypt_data(self, encrypted_data: bytes, master_password: str) -> dict:
-        salt = encrypted_data[:16]
-        encrypted = encrypted_data[16:]
-        key, _ = self.derive_key(master_password, salt)
-        f = Fernet(key)
-        decrypted = f.decrypt(encrypted)
-        return json.loads(decrypted.decode())
-    
-    def setup_styles(self):
+    def setup_treeview_styles(self):
+        """Configure treeview styles"""
         style = ttk.Style()
         style.theme_use('clam')
         
@@ -91,17 +55,21 @@ class PassmanSecure:
         style.map('Treeview.Heading',
                  background=[('active', '#4c4c4c')])
     
+    def center_window(self, window, width, height):
+        """Center window on screen"""
+        window.update_idletasks()
+        x = (window.winfo_screenwidth() // 2) - (width // 2)
+        y = (window.winfo_screenheight() // 2) - (height // 2)
+        window.geometry(f"+{x}+{y}")
+    
     def show_init_window(self):
+        """First time setup window"""
         self.root = tk.Tk()
-        self.root.title("🔐 Passman - Initial Setup")
+        self.root.title("🔐 Passman - Setup")
         self.root.geometry("450x400")
         self.root.resizable(False, False)
         self.root.configure(bg=COLORS["bg"])
-        
-        self.root.update_idletasks()
-        x = (self.root.winfo_screenwidth() // 2) - (450 // 2)
-        y = (self.root.winfo_screenheight() // 2) - (400 // 2)
-        self.root.geometry(f"+{x}+{y}")
+        self.center_window(self.root, 450, 400)
         
         main_frame = tk.Frame(self.root, bg=COLORS["bg"])
         main_frame.pack(fill="both", expand=True, padx=30, pady=30)
@@ -128,143 +96,87 @@ class PassmanSecure:
                                      fg=COLORS["fg"], insertbackground=COLORS["fg"])
         self.master_pass2.pack()
         
-        tk.Button(main_frame, text="🔐 Initialize", command=self.initialize,
+        def init():
+            master = self.master_pass.get()
+            master2 = self.master_pass2.get()
+            
+            if not master or not master2:
+                messagebox.showerror("Error", "Fields cannot be empty")
+                return
+            if master != master2:
+                messagebox.showerror("Error", "Passwords do not match")
+                return
+            if len(master) < 4:
+                messagebox.showerror("Error", "Password must be at least 4 characters")
+                return
+            
+            self.core.init_db(master)
+            messagebox.showinfo("Success", "✅ Passman initialized")
+            self.root.destroy()
+            self.show_login()
+        
+        tk.Button(main_frame, text="🔐 Initialize", command=init,
                  bg=COLORS["button_success"], fg="white", font=('Arial', 10, 'bold'),
                  padx=20, pady=5, cursor="hand2", relief="flat").pack(pady=30)
         
         self.root.mainloop()
     
-    def initialize(self):
-        master = self.master_pass.get()
-        master2 = self.master_pass2.get()
-        
-        if not master or not master2:
-            messagebox.showerror("Error", "Fields cannot be empty")
-            return
-        if master != master2:
-            messagebox.showerror("Error", "Passwords do not match")
-            return
-        if len(master) < 4:
-            messagebox.showerror("Error", "Password must be at least 4 characters")
-            return
-        
-        try:
-            os.makedirs(self.app_dir, exist_ok=True)
-            encrypted = self.encrypt_data({}, master)
-            with open(self.data_file, "wb") as f:
-                f.write(encrypted)
-            with open(self.key_file, "wb") as f:
-                f.write(b"initialized")
-            messagebox.showinfo("Success", "✅ Passman initialized successfully")
-            self.root.destroy()
-            self.show_main_window()
-        except Exception as e:
-            messagebox.showerror("Error", str(e))
-    
-    def authenticate(self):
-        """Authentication with anti-brute force protection"""
-        
-        # Check if locked out
-        if self.lockout_time:
-            elapsed = time.time() - self.lockout_time
-            if elapsed < self.lockout_duration:
-                remaining = int(self.lockout_duration - elapsed)
-                minutes = remaining // 60
-                seconds = remaining % 60
-                messagebox.showerror(
-                    "🔒 Account Locked", 
-                    f"Too many failed attempts.\n"
-                    f"Wait {minutes}m {seconds}s before trying again."
-                )
-                return False
-            else:
-                self.failed_attempts = 0
-                self.lockout_time = None
-        
-        # Show remaining attempts
-        if self.failed_attempts > 0:
-            remaining = self.max_attempts - self.failed_attempts
-            msg = f"Remaining attempts: {remaining}"
-        else:
-            msg = "Enter your master password"
-        
-        password = simpledialog.askstring("🔐 Authentication", msg, show="*")
-        if not password:
-            return False
-        
-        try:
-            with open(self.data_file, "rb") as f:
-                encrypted_data = f.read()
-            self.decrypt_data(encrypted_data, password)
-            self.current_password = password
-            self.failed_attempts = 0
-            self.lockout_time = None
-            return True
-            
-        except Exception:
-            self.failed_attempts += 1
-            remaining = self.max_attempts - self.failed_attempts
-            
-            if self.failed_attempts >= self.max_attempts:
-                self.lockout_time = time.time()
-                messagebox.showerror(
-                    "❌ Access Denied", 
-                    f"Incorrect password.\n\n"
-                    f"You have exceeded {self.max_attempts} attempts.\n"
-                    f"System locked for {self.lockout_duration // 60} minutes."
-                )
-                return False
-            else:
-                messagebox.showerror(
-                    "❌ Incorrect Password", 
-                    f"You have {remaining} attempt(s) remaining before lockout."
-                )
-                return False
-    
-    def load_data(self):
-        try:
-            with open(self.data_file, "rb") as f:
-                encrypted_data = f.read()
-            return self.decrypt_data(encrypted_data, self.current_password)
-        except:
-            return {}
-    
-    def save_data(self, data):
-        try:
-            encrypted = self.encrypt_data(data, self.current_password)
-            with open(self.data_file, "wb") as f:
-                f.write(encrypted)
-            return True
-        except:
-            return False
-    
-    def generate_password(self):
-        chars = string.ascii_letters + string.digits + "!@#$%^&*"
-        return ''.join(secrets.choice(chars) for _ in range(16))
-    
-    def copy_to_clipboard(self, text):
-        try:
-            pyperclip.copy(text)
-            self.status_label.config(text="✅ Copied to clipboard")
-            self.root.after(2000, lambda: self.status_label.config(text="Ready"))
-        except:
-            messagebox.showerror("Error", "Could not copy to clipboard")
-    
-    def show_main_window(self):
-        if not self.authenticate():
+    def show_login(self):
+        """Show login dialog"""
+        # Check if locked first
+        locked, remaining = self.core.is_locked()
+        if locked:
+            minutes = int(remaining // 60)
+            seconds = int(remaining % 60)
+            messagebox.showerror("Locked", 
+                f"Too many failed attempts.\n"
+                f"Wait {minutes}m {seconds}s before trying again.")
             sys.exit(0)
         
+        password = simpledialog.askstring("🔐 Authentication", "Enter master password:", show="*")
+        if not password:
+            sys.exit(0)
+        
+        success, remaining = self.core.authenticate(password)
+        
+        if not success:
+            if remaining == -2:
+                messagebox.showerror("Error", 
+                    "❌ Password database is corrupted!\n\n"
+                    "The database file appears to be damaged.\n"
+                    f"Location: {self.core.data_file}\n\n"
+                    "Try restoring from backup or delete the .passman folder and reinitialize.")
+                sys.exit(0)
+            elif remaining == -1:
+                locked, remaining_time = self.core.is_locked()
+                if locked:
+                    minutes = int(remaining_time // 60)
+                    seconds = int(remaining_time % 60)
+                    messagebox.showerror("Locked", 
+                        f"Too many failed attempts.\n"
+                        f"Wait {minutes}m {seconds}s before trying again.")
+                else:
+                    messagebox.showerror("Locked", "Too many failed attempts. Try again later.")
+                sys.exit(0)
+            elif remaining > 0:
+                messagebox.showerror("Error", f"Incorrect password. {remaining} attempts left.")
+                self.show_login()  # Try again
+            else:
+                messagebox.showerror("Error", "Authentication failed")
+                sys.exit(0)
+        else:
+            self.show_main_window()
+    
+    def show_main_window(self):
+        """Main application window"""
         self.root = tk.Tk()
         self.root.title("🔐 Passman - Password Manager")
         self.root.geometry("1000x650")
         self.root.configure(bg=COLORS["bg"])
+        self.center_window(self.root, 1000, 650)
         
-        self.root.update_idletasks()
-        x = (self.root.winfo_screenwidth() // 2) - (1000 // 2)
-        y = (self.root.winfo_screenheight() // 2) - (650 // 2)
-        self.root.geometry(f"+{x}+{y}")
-        
-        self.setup_styles()
+        # Apply treeview styles
+        self.setup_treeview_styles()
         
         # Header
         header = tk.Frame(self.root, bg=COLORS["bg"], height=70)
@@ -293,7 +205,7 @@ class PassmanSecure:
         tk.Button(button_frame, text="👁️ Show/Hide", command=self.toggle_passwords,
                  bg=COLORS["button_info"], **btn_config).pack(side="left", padx=5)
         
-        tk.Button(button_frame, text="📋 View Details", command=self.show_details,
+        tk.Button(button_frame, text="📋 Details", command=self.show_details,
                  bg=COLORS["button_primary"], **btn_config).pack(side="left", padx=5)
         
         # Search
@@ -312,7 +224,7 @@ class PassmanSecure:
         tk.Button(search_frame, text="Clear", command=self.clear_search,
                  bg="#7f8c8d", **btn_config).pack(side="left", padx=5)
         
-        # Treeview
+        # Treeview with scrollbar
         tree_frame = tk.Frame(self.root, bg=COLORS["bg"])
         tree_frame.pack(fill="both", expand=True, padx=20, pady=10)
         
@@ -343,13 +255,14 @@ class PassmanSecure:
         self.root.mainloop()
     
     def refresh_list(self):
+        """Refresh the password list"""
         for item in self.tree.get_children():
             self.tree.delete(item)
         
-        self.data = self.load_data()
+        data = self.core.get_all()
         search = self.search_entry.get().lower()
         
-        for service, info in self.data.items():
+        for service, info in data.items():
             if search in service.lower():
                 if self.show_passwords:
                     pass_display = info["password"]
@@ -357,19 +270,33 @@ class PassmanSecure:
                     pass_display = "••••••••"
                 self.tree.insert("", "end", text=service, values=(info["username"], pass_display))
         
-        self.status_label.config(text=f"📊 Total: {len(self.data)} passwords")
+        self.status_label.config(text=f"📊 Total: {len(data)} passwords")
     
     def toggle_passwords(self):
+        """Toggle password visibility"""
         self.show_passwords = not self.show_passwords
         self.refresh_list()
     
     def on_double_click(self, event):
+        """Double click to copy password"""
         selected = self.tree.selection()
         if selected:
             service = self.tree.item(selected[0])["text"]
-            self.copy_to_clipboard(self.data[service]["password"])
+            data = self.core.get(service)
+            if data:
+                self.copy_to_clipboard(data["password"])
+    
+    def copy_to_clipboard(self, text):
+        """Copy text to clipboard"""
+        try:
+            pyperclip.copy(text)
+            self.status_label.config(text="✅ Copied to clipboard")
+            self.root.after(2000, lambda: self.status_label.config(text="Ready"))
+        except:
+            messagebox.showerror("Error", "Could not copy to clipboard")
     
     def get_selected(self):
+        """Get currently selected service"""
         selected = self.tree.selection()
         if not selected:
             messagebox.showwarning("Warning", "Select a service first")
@@ -377,17 +304,14 @@ class PassmanSecure:
         return self.tree.item(selected[0])["text"]
     
     def add_entry(self):
+        """Add new password dialog"""
         dialog = tk.Toplevel(self.root)
         dialog.title("Add Password")
         dialog.geometry("500x500")
         dialog.configure(bg=COLORS["bg"])
         dialog.transient(self.root)
         dialog.grab_set()
-        
-        dialog.update_idletasks()
-        x = (dialog.winfo_screenwidth() // 2) - (500 // 2)
-        y = (dialog.winfo_screenheight() // 2) - (500 // 2)
-        dialog.geometry(f"+{x}+{y}")
+        self.center_window(dialog, 500, 500)
         
         main_frame = tk.Frame(dialog, bg=COLORS["bg"])
         main_frame.pack(fill="both", expand=True, padx=20, pady=20)
@@ -418,7 +342,7 @@ class PassmanSecure:
         
         def gen_pass():
             password_entry.delete(0, "end")
-            password_entry.insert(0, self.generate_password())
+            password_entry.insert(0, self.core.generate_password())
         
         tk.Button(main_frame, text="🔑 Generate Secure Password", command=gen_pass,
                  bg=COLORS["button_success"], fg="white", font=('Arial', 10),
@@ -433,12 +357,11 @@ class PassmanSecure:
                 messagebox.showerror("Error", "All fields are required")
                 return
             
-            if service in self.data:
+            if service in self.core.get_all():
                 if not messagebox.askyesno("Confirm", f"Overwrite {service}?"):
                     return
             
-            self.data[service] = {"username": username, "password": password}
-            if self.save_data(self.data):
+            if self.core.add(service, username, password):
                 messagebox.showinfo("Success", f"✅ Saved: {service}")
                 dialog.destroy()
                 self.refresh_list()
@@ -452,11 +375,12 @@ class PassmanSecure:
                  padx=20, pady=5, cursor="hand2", relief="flat").pack()
     
     def edit_entry(self):
+        """Edit existing password dialog"""
         service = self.get_selected()
         if not service:
             return
         
-        data = self.data[service]
+        data = self.core.get(service)
         
         dialog = tk.Toplevel(self.root)
         dialog.title(f"Edit - {service}")
@@ -464,11 +388,7 @@ class PassmanSecure:
         dialog.configure(bg=COLORS["bg"])
         dialog.transient(self.root)
         dialog.grab_set()
-        
-        dialog.update_idletasks()
-        x = (dialog.winfo_screenwidth() // 2) - (500 // 2)
-        y = (dialog.winfo_screenheight() // 2) - (450 // 2)
-        dialog.geometry(f"+{x}+{y}")
+        self.center_window(dialog, 500, 450)
         
         main_frame = tk.Frame(dialog, bg=COLORS["bg"])
         main_frame.pack(fill="both", expand=True, padx=20, pady=20)
@@ -493,8 +413,7 @@ class PassmanSecure:
         password_entry.pack(pady=5, padx=20)
         
         def save():
-            self.data[service] = {"username": username_entry.get(), "password": password_entry.get()}
-            if self.save_data(self.data):
+            if self.core.update(service, username_entry.get(), password_entry.get()):
                 messagebox.showinfo("Success", "✅ Updated")
                 dialog.destroy()
                 self.refresh_list()
@@ -508,22 +427,23 @@ class PassmanSecure:
                  padx=20, pady=5, cursor="hand2", relief="flat").pack()
     
     def delete_entry(self):
+        """Delete password entry"""
         service = self.get_selected()
         if not service:
             return
         
         if messagebox.askyesno("Confirm", f"Delete {service}?"):
-            del self.data[service]
-            if self.save_data(self.data):
+            if self.core.delete(service):
                 messagebox.showinfo("Success", f"✅ Deleted: {service}")
                 self.refresh_list()
     
     def show_details(self):
+        """Show password details dialog"""
         service = self.get_selected()
         if not service:
             return
         
-        data = self.data[service]
+        data = self.core.get(service)
         
         dialog = tk.Toplevel(self.root)
         dialog.title(f"Details - {service}")
@@ -531,11 +451,7 @@ class PassmanSecure:
         dialog.configure(bg=COLORS["bg"])
         dialog.transient(self.root)
         dialog.grab_set()
-        
-        dialog.update_idletasks()
-        x = (dialog.winfo_screenwidth() // 2) - (500 // 2)
-        y = (dialog.winfo_screenheight() // 2) - (400 // 2)
-        dialog.geometry(f"+{x}+{y}")
+        self.center_window(dialog, 500, 400)
         
         main_frame = tk.Frame(dialog, bg=COLORS["bg"])
         main_frame.pack(fill="both", expand=True, padx=20, pady=20)
@@ -543,6 +459,7 @@ class PassmanSecure:
         tk.Label(main_frame, text=f"🔐 {service}", font=("Arial", 18, "bold"),
                 bg=COLORS["bg"], fg=COLORS["fg"]).pack(pady=20)
         
+        # Username
         user_frame = tk.Frame(main_frame, bg=COLORS["bg"])
         user_frame.pack(fill="x", padx=20, pady=10)
         
@@ -553,6 +470,7 @@ class PassmanSecure:
                  bg=COLORS["button_primary"], fg="white", font=('Arial', 9),
                  padx=10, pady=2, cursor="hand2", relief="flat").pack(side="right")
         
+        # Password
         pass_frame = tk.Frame(main_frame, bg=COLORS["bg"])
         pass_frame.pack(fill="x", padx=20, pady=10)
         
@@ -582,8 +500,9 @@ class PassmanSecure:
                  padx=30, pady=5, cursor="hand2", relief="flat").pack(pady=30)
     
     def clear_search(self):
+        """Clear search box"""
         self.search_entry.delete(0, "end")
         self.refresh_list()
 
 if __name__ == "__main__":
-    app = PassmanSecure()
+    app = PassmanUI()
